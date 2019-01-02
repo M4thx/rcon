@@ -72,6 +72,12 @@ class SourceRCON {
      * @private
      */
     this.authenticated = false;
+
+    /**
+     * RCON password
+     * @type {string}
+     */
+    this.password = options.password;
   }
 
   /**
@@ -101,7 +107,7 @@ class SourceRCON {
    * @param {string} password
    * @returns {Promise<void>}
    */
-  authenticate(password) {
+  authenticate() {
     return new Promise((resolve, reject) => {
       if (!this.connected)
         reject(Error('Not connected'));
@@ -110,7 +116,7 @@ class SourceRCON {
         reject(Error('Already authenticated'));
 
       // Send a authentication packet (0x02)
-      this.write(Protocol.SERVERDATA_AUTH, Protocol.ID_AUTH, password)
+      this.write(Protocol.SERVERDATA_AUTH, Protocol.ID_AUTH, this.password)
         .then((data) => {
           if (data.id === Protocol.ID_AUTH) { // Request ID !== -1 mean success!
             this.authenticated = true;
@@ -158,7 +164,14 @@ class SourceRCON {
    */
   write(type, id, body) {
     return new Promise((resolve, reject) => {
+      let timer = setTimeout(() => {
+        this.disconnect();
+        reject(Error('Request timed out'));
+      }, 2000);
+
       const onData = packet => {
+        clearTimeout(timer);
+
         const decodedPacket = Packet.decode(packet, this.encoding);
 
         // Because server will response twice(0x00 and 0x02) if we send authenticate packet(0x03)
@@ -166,7 +179,6 @@ class SourceRCON {
         if (type === Protocol.SERVERDATA_AUTH && decodedPacket.type !== Protocol.SERVERDATA_AUTH_RESPONSE)
           return;
 
-        this.connection.removeListener('data', onData);
         this.connection.removeListener('error', onError); // GC
         resolve(decodedPacket); // Let's return our decoded packet data!
       }
@@ -195,8 +207,10 @@ class SourceRCON {
    */
   execute(command) {
     return new Promise((resolve, reject) => {
-      if (!this.connection.writable)
+      if (!this.connection.writable) {
+        this.disconnect();
         reject(Error('Unable to write to socket'));
+      }
 
       if (!this.connected)
         reject(Error('Not connected'));
@@ -204,9 +218,29 @@ class SourceRCON {
       if (!this.authenticated)
         reject(Error('Not authorized'));
 
+      const sendPacket = () => {
+        this.write(Protocol.SERVERDATA_EXECCOMMAND, Protocol.ID_REQUEST, command, this.encoding)
+          .then(data => resolve(data.body.replace(/\n$/, ''))) // Last new line must be gooone
+          .catch(async error => {
+            if(error.message === 'Request timed out') {
+              try {
+                await this.connect();
+                await this.authenticate(this.password);
+                sendPacket();
+              } catch(err) {
+                reject(err);
+              }
+            } else reject(error);
+          });
+      }
+
+      sendPacket();
+
+      /*
       this.write(Protocol.SERVERDATA_EXECCOMMAND, Protocol.ID_REQUEST, command, this.encoding)
         .then(data => resolve(data.body.replace(/\n$/, ''))) // Last new line must be gooone
         .catch(reject);
+      */
     });
   }
 }
