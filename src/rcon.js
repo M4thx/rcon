@@ -170,14 +170,14 @@ class SourceRCON {
       }, 2000);
 
       const onData = packet => {
-        clearTimeout(timer);
-
         const decodedPacket = Packet.decode(packet, this.encoding);
 
         // Because server will response twice(0x00 and 0x02) if we send authenticate packet(0x03)
         // but we need 0x02 for confirm
         if (type === Protocol.SERVERDATA_AUTH && decodedPacket.type !== Protocol.SERVERDATA_AUTH_RESPONSE)
           return;
+
+        clearTimeout(timer);
 
         this.connection.removeListener('error', onError); // GC
         resolve(decodedPacket); // Let's return our decoded packet data!
